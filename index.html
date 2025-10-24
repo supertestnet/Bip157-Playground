@@ -465,8 +465,21 @@
                         var double_sha = await sha256( hexToBytes( single_sha ) );
                         var blockhash = reverseHexString( double_sha );
                         blockhashes.push( blockhash );    
-                        if ( blockhashes.length >= blockheight ) addToDB( `blockhashes`, blockhashes );
                     }
+                }
+                $( '.progressBar' ).style.width = `100%`;
+                $( '.progress_label' ).innerText = `Progress syncing headers: 100%`;
+                await waitSomeTime( 10 );
+                $( '.explainer' ).innerText = `Your browser is now saving the headers in your browser's memory. This may take a few minutes. When it is done, your browser will automatically redirect to the next page.`;
+                var num_of_sets = Math.ceil( blockheight / 1000 );
+                var i; for ( i=0; i<num_of_sets; i++ ) {
+                    var percent = Number( ( ( ( i + 1 ) / num_of_sets ) * 100 ).toFixed( 2 ) );
+                    $( '.progressBar' ).style.width = `${percent}%`;
+                    $( '.progress_label' ).innerText = `Progress storing headers: ${percent}%`;
+                    var start = i * 1000;
+                    var end = start + 1000;
+                    var slice_of_hashes = blockhashes.slice( start, end );
+                    await addToDB( `blockhashes`, slice_of_hashes );
                 }
                 showPage( 'check_address' );
             }
