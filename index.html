@@ -586,7 +586,7 @@
                 var [ the_db, db_has_content ] = await openDB( db_name );
                 db = the_db;
                 if ( db_has_content ) blockhashes = await getFromDB( db_name, "all" );
-                var db_is_ready = true;
+                db_is_ready = true;
                 console.log( 'ready' );
             })();
         </script>
