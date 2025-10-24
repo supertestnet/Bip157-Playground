@@ -17,7 +17,7 @@ For my L1 wallets, I typically have code in the wallet that generates one or mor
 
 But that is bad for user privacy. Electrum servers can easily log your ip address (which is often associated with your real-world identity) and the bitcoin addresses your wallet asked about, and then sell that info to chain analysis companies, who may resell it to other corporate surveillance firms or even law enforcement.
 
-Bip157 and Bip158 are two specifications that were introduced into bitcoin in 2017 to help fix this. Bip157 offers a privacy-protecting way to run a bitcoin wallet, and bip158 offers a way for bitcoin nodes to help bitcoin wallets do that. A bip157 "wallet" does *not* query a server its addresses. Instead, it uses a two-step process to check the balance of its addresses.
+Bip157 and Bip158 are two specifications that were introduced into bitcoin in 2017 to help fix this. Bip157 offers a privacy-protecting way to run a bitcoin wallet, and bip158 offers a way for bitcoin nodes to help bitcoin wallets do that. A bip157 wallet does *not* query a server its addresses. Instead, it uses a two-step process to check the balance of its addresses.
 
 The first step is to ask bitcoin nodes for a bit of data called a Compact Block Filter about each bitcoin block created after their wallet was generated -- the "start height." This Compact Block Filter -- also called a CBF filter or a Bip158 filter or a Bip157 filter -- is not a full block, it's only a list of addresses that sent or received money in a block, and bitcoin nodes pass the list through a compression algorithm before giving it to the user, that way it's relatively small -- much smaller than a full bitcoin block.
 
