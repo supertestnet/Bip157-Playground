@@ -59,8 +59,8 @@
                 var loop = rest => {
                     var tx = {}
                     tx[ "hex" ] = ``;
-                    tx[ "version" ] = txs.substring( 0, 8 );
-                    tx[ "hex" ] += txs.substring( 0, 8 );
+                    tx[ "version" ] = rest.substring( 0, 8 );
+                    tx[ "hex" ] += rest.substring( 0, 8 );
                     var rest = rest.substring( 8 );
                     var is_segwit = rest.substring( 0, 4 ) === "0001";
                     if ( is_segwit ) {
@@ -387,7 +387,7 @@
                             $( '.progress_label' ).innerText = `Progress checking tx history: ${percent_to_display}%`;
                             await waitSomeTime( 1000 );
                             if ( k === 5 ) prev_percent = percent_now;
-                            if ( percent_to_display === 100 ) console.log( 'time to switch' );
+                            if ( percent_to_display === 100 ) showPage( 'matches' );
                         }
                     });
                     console.log( 'downloading filters...' );
@@ -418,7 +418,6 @@
                     li.innerText = `Block ${item}`;
                     $( '.list_of_matches' ).append( li );
                 });
-                showPage( 'matches' );
                 //download the blocks
                 var addy = $( '.address' ).value;
                 var script = tapscript.Script.encode( tapscript.Address.toScriptPubKey( addy ) ).hex.substring( 2 );
