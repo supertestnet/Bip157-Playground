@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, user-scalable=no">
+        <script src="https://bundle.run/buffer@6.0.3"></script>
+        <script>var Buffer = buffer.Buffer;</script>
+        <script src="https://supertestnet.github.io/gcs_filter/gcs_filter.js"></script>
+        <script src="https://unpkg.com/@cmdcode/tapscript@1.5.3"></script>
+        <title>Bip157 Playground</title>
+        <script>
+            var filter_sources = [ "bdn.bitcoin.lu.ke", "block-dn.org" ];
+            var blockhashes = [];
+            var blockheight = 0;
+            var matches = [];
+            var received_in_these_txs = {};
+            var sent_in_these_txs = {};
+            var bytesToHex = bytes => bytes.reduce( ( str, byte ) => str + byte.toString( 16 ).padStart( 2, "0" ), "" );
+            var hexToBytes = hex => Uint8Array.from( hex.match( /.{1,2}/g ).map( byte => parseInt( byte, 16 ) ) );
+            var reverseHexString = s => s.match(/[a-fA-F0-9]{2}/g).reverse().join('');
+            var waitSomeTime = num => new Promise( resolve => setTimeout( resolve, num ) );
+            var decodeCompactSize = compact_size => {
+                var first_byte = compact_size.substring( 0, 2 ).toLowerCase();
+                var size = Number( BigInt( `0x${reverseHexString( compact_size.substring( 0, 2 ) )}` ) );
+                var actual_compact_size = compact_size.substring( 0, 2 );
+                if ( first_byte === "fd" ) {
+                    var rest = compact_size.substring( 2, 2 + 4 ).toLowerCase();
+                    var size = Number( BigInt( `0x${reverseHexString( rest )}` ) );
+                    var actual_compact_size = compact_size.substring( 0, 6 );
+                }
+                if ( first_byte === "fe" ) {
+                    var rest = compact_size.substring( 2, 2 + 8 ).toLowerCase();
+                    var size = Number( BigInt( `0x${reverseHexString( rest )}` ) );
+                    var actual_compact_size = compact_size.substring( 0, 10 );
+                }
+                if ( first_byte === "ff" ) {
+                    var rest = compact_size.substring( 2 ).toLowerCase();
+                    var size = Number( BigInt( `0x${reverseHexString( rest )}` ) );
+                    var actual_compact_size = compact_size;
+                }
+                return { size, first_byte, actual_compact_size }
+            }
+            var blobToHex = async blob => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve( bytesToHex( new Uint8Array( reader.result ) ) );
+                    reader.onerror = reject;
+                    reader.readAsArrayBuffer(blob);
+                });
+            }
+            var sha256 = async s => {
+                if ( typeof s == "string" ) s = new TextEncoder().encode( s );
+                var arr = await crypto.subtle.digest( 'SHA-256', s );
+                return bytesToHex( new Uint8Array( arr ) );
+            }
+            var parseTransactions = ( num_of_txs, txs ) => {
+                var rest = txs;
+                var tx_objects = [];
+                var loop = rest => {
+                    var tx = {}
+                    tx[ "hex" ] = ``;
+                    tx[ "version" ] = txs.substring( 0, 8 );
+                    tx[ "hex" ] += txs.substring( 0, 8 );
+                    var rest = rest.substring( 8 );
+                    var is_segwit = rest.substring( 0, 4 ) === "0001";
+                    if ( is_segwit ) {
+                        tx[ "segwit_flag" ] = rest.substring( 0, 4 );
+                        tx[ "is_segwit" ] = true;
+                        tx[ "hex" ] += rest.substring( 0, 4 );
+                        rest = rest.substring( 4 );
+                    }
+                    var compact_size = rest.substring( 0, 18 );
+                    var { size, first_byte, actual_compact_size } = decodeCompactSize( compact_size );
+                    tx[ "number_of_inputs" ] = [ size , actual_compact_size ];
+                    tx[ "hex" ] += rest.substring( 0, 2 );
+                    rest = rest.substring( 2 );
+                    if ( first_byte === "fd" ) tx[ "hex" ] += rest.substring( 0, 4 );
+                    if ( first_byte === "fd" ) rest = rest.toString( "hex" ).substring( 4 );
+                    if ( first_byte === "fe" ) tx[ "hex" ] += rest.substring( 0, 8 );
+                    if ( first_byte === "fe" ) rest = rest.substring( 8 );
+                    if ( first_byte === "ff" ) tx[ "hex" ] += rest.substring( 0, 16 );
+                    if ( first_byte === "ff" ) rest = rest.substring( 16 );
+                    var num_of_inputs = size;
+                    var i; for ( i=0; i<num_of_inputs; i++ ) {
+                        tx[ `input_${i}` ] = {txid: rest.substring( 0, 64 ), vout: rest.substring( 64, 64 + 8 )}
+                        tx[ "hex" ] += rest.substring( 0, 64 + 8 );
+                        rest = rest.substring( 64 + 8 );
+                        var compact_size = rest.substring( 0, 18 );
+                        var { size, first_byte, actual_compact_size } = decodeCompactSize( compact_size );
+                        tx[ `input_${i}` ][ "length_of_scriptsig" ] = [ size, actual_compact_size ];
+                        tx[ "hex" ] += rest.substring( 0, 2 );
+                        rest = rest.substring( 2 );
+                        if ( first_byte === "fd" ) tx[ "hex" ] += rest.substring( 0, 4 );
+                        if ( first_byte === "fd" ) rest = rest.toString( "hex" ).substring( 4 );
+                        if ( first_byte === "fe" ) tx[ "hex" ] += rest.substring( 0, 8 );
+                        if ( first_byte === "fe" ) rest = rest.substring( 8 );
+                        if ( first_byte === "ff" ) tx[ "hex" ] += rest.substring( 0, 16 );
+                        if ( first_byte === "ff" ) rest = rest.substring( 16 );
+                        tx[ `input_${i}` ][ "scriptsig" ] = rest.substring( 0, tx[ `input_${i}` ][ "length_of_scriptsig" ][ 0 ] * 2 );
+                        tx[ "hex" ] += rest.substring( 0, tx[ `input_${i}` ][ "length_of_scriptsig" ][ 0 ] * 2 );
+                        rest = rest.substring( tx[ `input_${i}` ][ "length_of_scriptsig" ][ 0 ] * 2 );
+                        tx[ `input_${i}` ][ "sequence" ] = rest.substring( 0, 8 );
+                        tx[ "hex" ] += rest.substring( 0, 8 );
+                        rest = rest.substring( 8 );
+                    }
+                    var compact_size = rest.substring( 0, 18 );
+                    var { size, first_byte, actual_compact_size } = decodeCompactSize( compact_size );
+                    tx[ `num_of_outputs` ] = [ size, actual_compact_size ];
+                    tx[ "hex" ] += rest.substring( 0, 2 );
+                    rest = rest.substring( 2 );
+                    if ( first_byte === "fd" ) tx[ "hex" ] += rest.substring( 0, 4 );
+                    if ( first_byte === "fd" ) rest = rest.toString( "hex" ).substring( 4 );
+                    if ( first_byte === "fe" ) tx[ "hex" ] += rest.substring( 0, 8 );
+                    if ( first_byte === "fe" ) rest = rest.substring( 8 );
+                    if ( first_byte === "ff" ) tx[ "hex" ] += rest.substring( 0, 16 );
+                    if ( first_byte === "ff" ) rest = rest.substring( 16 );
+                    var num_of_outputs = size;
+                    var i; for ( i=0; i<num_of_outputs; i++ ) {
+                        tx[ `output_${i}` ] = {value: rest.substring( 0, 16 )}
+                        tx[ "hex" ] += rest.substring( 0, 16 );
+                        rest = rest.substring( 16 );
+                        var compact_size = rest.substring( 0, 18 );
+                        var { size, first_byte, actual_compact_size } = decodeCompactSize( compact_size );
+                        tx[ `output_${i}` ][ "length_of_scriptPubKey" ] = [ size, actual_compact_size ];
+                        tx[ "hex" ] += rest.substring( 0, 2 );
+                        rest = rest.substring( 2 );
+                        if ( first_byte === "fd" ) tx[ "hex" ] += rest.substring( 0, 4 );
+                        if ( first_byte === "fd" ) rest = rest.toString( "hex" ).substring( 4 );
+                        if ( first_byte === "fe" ) tx[ "hex" ] += rest.substring( 0, 8 );
+                        if ( first_byte === "fe" ) rest = rest.substring( 8 );
+                        if ( first_byte === "ff" ) tx[ "hex" ] += rest.substring( 0, 16 );
+                        if ( first_byte === "ff" ) rest = rest.substring( 16 );
+                        tx[ `output_${i}` ][ "scriptPubKey" ] = scriptPubKey = rest.substring( 0, size * 2 );    
+                        tx[ "hex" ] += rest.substring( 0, size * 2 );
+                        rest = rest.substring( size * 2 );
+                    }
+                    if ( is_segwit ) {
+                        var i; for ( i=0; i<num_of_inputs; i++ ) {
+                            var compact_size = rest.substring( 0, 18 );
+                            var { size, first_byte, actual_compact_size } = decodeCompactSize( compact_size );
+                            tx[ `input_${i}` ][ "num_of_elements_in_witness" ] = [ size, actual_compact_size ];
+                            tx[ `input_${i}` ][ "sizes_of_each_witness_element" ] = [];
+                            tx[ `input_${i}` ][ "witness" ] = [];
+                            tx[ "hex" ] += rest.substring( 0, 2 );
+                            rest = rest.substring( 2 );
+                            if ( first_byte === "fd" ) tx[ "hex" ] += rest.substring( 0, 4 );
+                            if ( first_byte === "fd" ) rest = rest.toString( "hex" ).substring( 4 );
+                            if ( first_byte === "fe" ) tx[ "hex" ] += rest.substring( 0, 8 );
+                            if ( first_byte === "fe" ) rest = rest.substring( 8 );
+                            if ( first_byte === "ff" ) tx[ "hex" ] += rest.substring( 0, 16 );
+                            if ( first_byte === "ff" ) rest = rest.substring( 16 );
+                            var num_of_elements = size;
+                            var j; for ( j=0; j<num_of_elements; j++ ) {
+                                var compact_size = rest.substring( 0, 18 );
+                                var { size, first_byte, actual_compact_size } = decodeCompactSize( compact_size );
+                                tx[ `input_${i}` ][ "sizes_of_each_witness_element" ].push( [ size, actual_compact_size ] );
+                                tx[ "hex" ] += rest.substring( 0, 2 );
+                                rest = rest.substring( 2 );
+                                if ( first_byte === "fd" ) tx[ "hex" ] += rest.substring( 0, 4 );
+                                if ( first_byte === "fd" ) rest = rest.toString( "hex" ).substring( 4 );
+                                if ( first_byte === "fe" ) tx[ "hex" ] += rest.substring( 0, 8 );
+                                if ( first_byte === "fe" ) rest = rest.substring( 8 );
+                                if ( first_byte === "ff" ) tx[ "hex" ] += rest.substring( 0, 16 );
+                                if ( first_byte === "ff" ) rest = rest.substring( 16 );
+                                tx[ `input_${i}` ][ "witness" ].push( rest.substring( 0, size * 2 ) );
+                                tx[ "hex" ] += rest.substring( 0, size * 2 );
+                                rest = rest.substring( size * 2 );
+                            }
+                        }
+                    }
+                    tx[ `locktime` ] = rest.substring( 0, 8 );
+                    tx[ "hex" ] += rest.substring( 0, 8 );
+                    rest = rest.substring( 8 );
+                    return [ tx, rest ];
+                }
+                var i; for ( i=0; i<num_of_txs; i++ ) {
+                    var [ tx, rest ] = loop( rest );
+                    tx_objects.push( tx );
+                }
+                return tx_objects;
+            }
+            var getTransactionsFromBlock = block => {
+                var { size, first_byte, actual_compact_size } = decodeCompactSize( block.substring( 160, 160 + 18 ) );
+                var txs = block.substring( 160 + 2 );
+                if ( first_byte === "fd" ) txs = txs.substring( 4 );
+                if ( first_byte === "fe" ) txs = txs.substring( 8 );
+                if ( first_byte === "ff" ) txs = txs.substring( 16 );
+                var tx_objects = parseTransactions( size, txs );
+                return tx_objects;
+            }
+            var getHeaders = async start_block => {
+                try {
+                    var data = await fetch( `https://${filter_sources[ 1 ]}/headers/${start_block}` );
+                    var blob = await data.blob();
+                    var headers = await blobToHex( blob );
+                    var num_of_headers = blockheight - start_block < 100000 ? blockheight - start_block : 100000;
+                    var array_of_headers = [];
+                    var i; for ( i=0; i<num_of_headers; i++ ) {
+                        var header = headers.substring( 0, 160 );
+                        array_of_headers.push( header );
+                        headers = headers.substring( 160 );
+                    }
+                    return array_of_headers;
+                } catch (e) {
+                    return "unknown error";
+                }
+            }
+            var getFilters = async block_to_check => {
+                try {
+                    var data = await fetch( `https://${filter_sources[ 1 ]}/filters/${block_to_check}` );
+                    var blob = await data.blob();
+                    var filters = await blobToHex( blob );
+                    var num_of_filters = blockheight - block_to_check < 2000 ? blockheight - block_to_check : 2000;
+                    var array_of_filters = [];
+                    var array_of_compact_sizes = [];
+                    var i; for ( i=0; i<num_of_filters; i++ ) {
+                        var cs_data = decodeCompactSize( filters.substring( 0, 18 ) );
+                        var filter = filters.substring( cs_data.actual_compact_size.length, cs_data.actual_compact_size.length + ( cs_data.size * 2 ) );
+                        array_of_filters.push( filter );
+                        array_of_compact_sizes.push( cs_data.actual_compact_size );
+                        filters = filters.substring( cs_data.actual_compact_size.length + ( cs_data.size * 2 ) );
+                    }
+                    return array_of_filters;
+                } catch (e) {
+                    return "unknown error";
+                }
+            }
+        </script>
+        <style>
+            * {
+                box-sizing: border-box;
+                font-size: 1.15rem;
+                font-family: Arial, sans-serif;
+            }
+            html {
+                max-width: 800px;
+                padding: 3rem 1rem;
+                margin: auto;
+                line-height: 1.25;
+                padding: 0;
+            }
+            body {
+                margin: 3rem 1rem;
+                word-wrap: break-word;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+            h2 {
+                font-size: 1.5rem;
+            }
+            input {
+                line-height: 1.25;
+                width: 100%;
+                height: 1.8rem;
+                font-size: 1.15rem;
+                border: 1px solid grey;
+            }
+            .hidden {
+                display: none !important;
+            }
+            .bold {
+                font-weight: bold;
+            }
+            .explainer {
+                margin-top: 1rem;
+            }
+            @media screen and (max-width: 600px) {
+            }
+        </style>
+        <script>
+            var $ = document.querySelector.bind( document );
+            var $$ = document.querySelectorAll.bind( document );
+            var url_params = new URLSearchParams( window.location.search );
+            var url_keys = url_params.keys();
+            var $_GET = {}
+            for ( var key of url_keys ) $_GET[ key ] = url_params.get( key );
+            var hash_arr = window.location.href.substring( window.location.href.indexOf( "#" ) ).split( "#" );
+            hash_arr.splice( 0, 1 );
+            var $_HASH = {}
+            hash_arr.forEach( item => {
+                var vals = item.split( "=" );
+                $_HASH[ vals[ 0 ] ] = vals[ 1 ];
+            });
+        </script>
+    </head>
+    <body>
+        <div class="home_page">
+            <h1>Bip157 Playground</h1>
+            <p>On this page you can use bip157 to explore the history of a bitcoin address with more privacy than you get from electrum servers, with the tradeoff that you have to download more data</p>
+            <p class="bold">First, sync the bitcoin headers</p>
+            <p><button class="sync_headers">Sync headers</button></p>
+        </div>
+        <div class="check_address hidden">
+            <p class="bold">Enter a bitcoin address</p>
+            <p><input class="address" value="bc1q64nzjk9pcvjhrs6tty925w34eh020403nl4uam"></p>
+            <p class="bold">Enter a start height -- that is, a blockheight from a time just before you created that address</p>
+            <p><input type="number" min="1" step="1" class="start_height" value="920000"></p>
+            <p><button class="submit_form">Submit</button></p>
+        </div>
+        <div class="progress_page hidden">
+            <h2 class="progress_label"></h2>
+            <div class="progress">
+                <h2><span id="goal" style="font-size: .8em; font-weight: normal;"></span></h2>
+                <div class="progressOutline" style="height: 2em; border: 1px solid grey; border-radius: 25px; overflow: hidden;">
+                    <div class="progressBar" style="height: 2em; background-color: #61eb34; width: 0%; transition: width 1s;">
+                    </div>
+                </div>
+                <div class="status"></div>
+            </div>
+            <div class="explainer"></div>
+        </div>
+        <div class="matches hidden">
+            <h2>Results</h2>
+            <p>Your address sent or received money in the following transactions:</p>
+            <ul class="list_of_matches"></ul>
+        </div>
+        <script>
+            console.log( 'not ready...' );
+            var showPage = page => {
+                $( '.home_page' ).classList.add( "hidden" );
+                $( '.check_address' ).classList.add( "hidden" );
+                $( '.progress_page' ).classList.add( "hidden" );
+                $( '.matches' ).classList.add( "hidden" );
+                $( `.${page}` ).classList.remove( "hidden" );
+            }
+            $( '.sync_headers' ).onclick = async () => {
+                if ( !blockheight ) await waitSomeTime( 1000 );
+                if ( !blockheight ) return alert( `something went wrong while trying to connect to the blockchain, please refresh your browser and try again` );
+                showPage( 'progress_page' );
+                $( '.progressBar' ).style.width = `0%`;
+                $( '.progress_label' ).innerText = `Progress syncing headers: 0%`;
+                $( '.explainer' ).innerText = `To use Bip157 filters quickly, you need the blockchain's headers first. Your browser is getting them right now.`;
+                var num_of_queries = Math.ceil( blockheight / 100000 );
+                var i; for ( i=0; i<num_of_queries; i++ ) {
+                    console.log( 'downloading headers...' );
+                    var headers = await getHeaders( i * 100000 );
+                    if ( headers === "unknown error" ) return alert( "aborting due to unknown error" );
+                    console.log( 'downloaded' );
+                    var j; for ( j=0; j<headers.length; j++ ) {
+                        if ( String( j ).endsWith( "000" ) ) {
+                            var percent = Number( ( Number( ( ( ( i * 100000 ) + j ) / blockheight ).toFixed( 4 ) ) * 100 ).toFixed( 2 ) );
+                            $( '.progressBar' ).style.width = `${percent}%`;
+                            $( '.progress_label' ).innerText = `Progress syncing headers: ${percent}%`;
+                        }
+                        var header = headers[ j ];
+                        var single_sha = await sha256( hexToBytes( header ) );
+                        var double_sha = await sha256( hexToBytes( single_sha ) );
+                        var blockhash = reverseHexString( double_sha );
+                        blockhashes.push( blockhash );                    
+                    }
+                }
+                showPage( 'check_address' );
+            }
+            $( '.submit_form' ).onclick = async () => {
+                matches = [];
+                showPage( 'progress_page' );
+                $( '.progressBar' ).style.width = `0%`;
+                $( '.progress_label' ).innerText = `Progress checking tx history: 0%`;
+                $( '.explainer' ).innerText = `Your browser is now downloading compact block filters from after your start height and scanning them to see if your address sent or received money in the corresponding blocks.`;
+                var addy = $( '.address' ).value;
+                console.log( `address I'm checking: ${addy}` );
+                var script = Buffer.from( tapscript.Script.encode( tapscript.Address.toScriptPubKey( addy ) ).hex.substring( 2 ), "hex" );
+                var start_height = Number( $( '.start_height' ).value );
+                console.log( `start height: ${start_height}` );
+                var rounded_start_height = Math.floor( start_height / 2000 ) * 2000;
+                var num_of_blocks_til_now = blockheight - rounded_start_height;
+                var in_multiples_of_2000 = Math.ceil( num_of_blocks_til_now / 2000 );
+                var queries = [];
+                var prev_percent = 0;
+                var alt_percent = 0;
+                var i; for ( i=0; i<in_multiples_of_2000; i++ ) queries.push( rounded_start_height + ( 2000 * i ) );
+                var i; for ( i=0; i<queries.length; i++ ) {
+                    var expected_blocknum = queries[ i ] + 2000 < blockheight ? queries[ i ] + 2000 : blockheight;
+                    var percent = Number( ( Number( ( ( expected_blocknum - start_height ) / ( blockheight - start_height ) ).toFixed( 4 ) ) * 100 ).toFixed( 2 ) );
+                    setTimeout( async () => {
+                        var percent_now = percent;
+                        var k; for ( k=0; k<6; k++ ) {
+                            var percent_to_display = Number( ( ( ( percent_now - prev_percent ) / 5 ) * k ).toFixed( 2 ) );
+                            percent_to_display = Number( ( prev_percent + percent_to_display ).toFixed( 2 ) );
+                            if ( percent_to_display < alt_percent ) {
+                                var percent_to_display = Number( ( ( ( percent_now - alt_percent ) / 5 ) * k ).toFixed( 2 ) );
+                                percent_to_display = Number( ( alt_percent + percent_to_display ).toFixed( 2 ) );
+                            }
+                            alt_percent = percent_to_display;
+                            $( '.progressBar' ).style.width = `${percent_to_display}%`;
+                            $( '.progress_label' ).innerText = `Progress checking tx history: ${percent_to_display}%`;
+                            await waitSomeTime( 1000 );
+                            if ( k === 5 ) prev_percent = percent_now;
+                            if ( percent_to_display === 100 ) console.log( 'time to switch' );
+                        }
+                    });
+                    console.log( 'downloading filters...' );
+                    var filters = await getFilters( queries[ i ] );
+                    console.log( 'downloaded!' );
+                    if ( filters === "unknown error" ) return alert( "aborting due to unknown error" );
+                    var j; for ( j=0; j<filters.length; j++ ) {
+                        var blocknum = queries[ i ] + j;
+                        if ( blocknum < start_height ) continue;
+                        var filter_i_want = filters[ j ];
+                        var block_filter = Buffer.from( filter_i_want, "hex" );
+                        var filter = gcs_filter( block_filter );
+                        if ( !blockhashes.length ) {
+                            var data = await fetch( `https://mempool.guide/api/block-height/${blocknum}` );
+                            var its_blockhash = await data.text();
+                        } else {
+                            var its_blockhash = blockhashes[ blocknum ];
+                        }
+                        var block_hash = Buffer.from( its_blockhash, "hex" );
+                        var key = block_hash.reverse().slice( 0, 16 );
+                        var match = filter.match( key, script );
+                        if ( match ) matches.push( blocknum );
+                    }
+                }
+                matches.forEach( item => {
+                    var li = document.createElement( "li" );
+                    li.setAttribute( "data-blocknum", item );
+                    li.innerText = `Block ${item}`;
+                    $( '.list_of_matches' ).append( li );
+                });
+                showPage( 'matches' );
+                //download the blocks
+                var addy = $( '.address' ).value;
+                var script = tapscript.Script.encode( tapscript.Address.toScriptPubKey( addy ) ).hex.substring( 2 );
+                if ( matches.length ) {
+                    var i; for ( i=0; i<matches.length; i++ ) {
+                        console.log( `loading block ${i+1} of ${matches.length}` );
+                        var blocknum = matches[ i ];
+                        var blockhash = blockhashes[ blocknum ];
+                        var data = await fetch( `https://mempool.guide/api/block/${blockhash}/raw` );
+                        var blob = await data.blob();
+                        var block = await blobToHex( blob );
+                        var txs = getTransactionsFromBlock( block );
+                        var j; for ( j=0; j<txs.length; j++ ) {
+                            var tx = tapscript.Tx.decode( txs[ j ].hex );
+                            tx.vout.forEach( ( output, index ) => {
+                                if ( output.scriptPubKey !== script ) return;
+                                var outpoint = `${tapscript.Tx.util.getTxid( tx )}:${index}`;
+                                received_in_these_txs[ outpoint ] = blocknum;
+                            });
+                            tx.vin.forEach( input => {
+                                var outpoint = `${input.txid}:${input.vout}`;
+                                if ( !Object.keys( received_in_these_txs ).includes( outpoint ) ) return;
+                                sent_in_these_txs[ tapscript.Tx.util.getTxid( tx ) ] = blocknum;
+                            });
+                        }
+                        Object.keys( received_in_these_txs ).forEach( item => {
+                            var blocknum = received_in_these_txs[ item ];
+                            var txid = item.substring( 0, 64 );
+                            $$( '.list_of_matches li' ).forEach( li => {
+                                if ( Number( li.getAttribute( "data-blocknum" ) ) === blocknum ) {
+                                    if ( !li.innerHTML.includes( "<ul" ) ) li.innerHTML += `<ul class="list_of_txids"></ul>`;
+                                    if ( li.innerHTML.includes( txid ) ) return;
+                                    var new_li = document.createElement( "li" );
+                                    new_li.innerHTML = `<a href="https://mempool.guide/tx/${txid}" target="_blank">${txid}</a>`;
+                                    li.getElementsByClassName( "list_of_txids" )[ 0 ].append( new_li );
+                                }
+                            });
+                        });
+                        Object.keys( sent_in_these_txs ).forEach( item => {
+                            var blocknum = sent_in_these_txs[ item ];
+                            var txid = item.substring( 0, 64 );
+                            $$( '.list_of_matches li' ).forEach( li => {
+                                if ( Number( li.getAttribute( "data-blocknum" ) ) === blocknum ) {
+                                    if ( !li.innerHTML.includes( "ul" ) ) li.innerHTML += `<ul class="list_of_txids"></ul>`;
+                                    if ( li.innerHTML.includes( txid ) ) return;
+                                    var new_li = document.createElement( "li" );
+                                    new_li.innerHTML = `<a href="https://mempool.guide/tx/${txid}" target="_blank">${txid}</a>`;
+                                    li.getElementsByClassName( "list_of_txids" )[ 0 ].append( new_li );
+                                }
+                            });
+                        });
+                    }
+                    $( '.list_of_matches' ).childNodes.forEach( li => {
+                        if ( !li.innerHTML.includes( "ul" ) ) li.innerHTML += `<ul><li>This one was a false positive</li></ul>`;
+                    });
+                }
+            }
+            (async()=>{
+                var data = await fetch( `https://mempool.guide/api/blocks/tip/height` );
+                blockheight = Number( await data.text() );
+                console.log( 'ready' );
+            })();
+        </script>
+    </body>
+</html>
