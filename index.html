@@ -415,6 +415,8 @@
         </div>
         <div class="matches hidden">
             <h2>Results</h2>
+            <p>Checked the following address: <span class="addy"></span></p>
+            <p>Your address has the following balance: <span class="balance">calculating...</span></p>
             <p>Your address sent or received money in the following transactions:</p>
             <ul class="list_of_matches"></ul>
         </div>
@@ -496,6 +498,7 @@
                 $( '.progress_label' ).innerText = `Progress checking tx history: 0%`;
                 $( '.explainer' ).innerText = `Your browser is now downloading compact block filters from after your start height and scanning them to see if your address sent or received money in the corresponding blocks.`;
                 var addy = $( '.address' ).value;
+                $( '.addy' ).innerText = addy;
                 console.log( `address I'm checking: ${addy}` );
                 var script = Buffer.from( tapscript.Script.encode( tapscript.Address.toScriptPubKey( addy ) ).hex.substring( 2 ), "hex" );
                 var start_height = Number( $( '.start_height' ).value );
@@ -530,6 +533,14 @@
                                 $( '.progressBar' ).style.width = `1%`;
                                 $( '.progress_label' ).innerText = `Progress downloading blocks: unknown percent`;
                                 $( '.explainer' ).innerText = `Downloading the blocks containing your transactions`;
+                                var all_are_synced = true;
+                                var i; for ( i=0; i<$( '.list_of_matches' ).children.length; i++ ) {
+                                    if ( !$( '.list_of_matches' ).children[ i ].innerHTML.includes( "ul" ) ) all_are_synced = false;
+                                }
+                                if ( all_are_synced ) {
+                                    $( '.progressBar' ).style.width = `100%`;
+                                    $( '.progress_label' ).innerText = `Progress downloading blocks: 100%`;
+                                }
                             }
                         }
                     });
@@ -565,17 +576,18 @@
                 //download the blocks
                 var addy = $( '.address' ).value;
                 var script = tapscript.Script.encode( tapscript.Address.toScriptPubKey( addy ) ).hex.substring( 2 );
+                var sum_of_received = 0;
+                var sum_of_sent = 0;
                 if ( matches.length ) {
+                    console.log( 'here i am' );
                     var i; for ( i=0; i<matches.length; i++ ) {
                         if ( !$( '.matches' ).classList.contains( "hidden" ) ) {
                             var percent = Number( ( ( ( i + 1 ) / matches.length ) * 100 ).toFixed( 2 ) );
-                            console.log( i, matches.length, percent );
                             $( '.progress_page' ).classList.remove( "hidden" );
                             $( '.progressBar' ).style.width = `${percent}%`;
                             $( '.progress_label' ).innerText = `Progress downloading blocks: ${percent}%`;
                             $( '.explainer' ).innerText = `Downloading the blocks containing your transactions`;
                         }
-                        console.log( `loading block ${i+1} of ${matches.length}` );
                         var blocknum = matches[ i ];
                         var blockhash = blockhashes[ blocknum ];
                         var data = await fetch( `https://mempool.guide/api/block/${blockhash}/raw` );
@@ -587,16 +599,18 @@
                             tx.vout.forEach( ( output, index ) => {
                                 if ( output.scriptPubKey !== script ) return;
                                 var outpoint = `${tapscript.Tx.util.getTxid( tx )}:${index}`;
-                                received_in_these_txs[ outpoint ] = blocknum;
+                                received_in_these_txs[ outpoint ] = [ blocknum, Number( output.value ), tx ];
+                                sum_of_received = sum_of_received + Number( output.value );
                             });
                             tx.vin.forEach( input => {
                                 var outpoint = `${input.txid}:${input.vout}`;
                                 if ( !Object.keys( received_in_these_txs ).includes( outpoint ) ) return;
-                                sent_in_these_txs[ tapscript.Tx.util.getTxid( tx ) ] = blocknum;
+                                sent_in_these_txs[ tapscript.Tx.util.getTxid( tx ) ] = [ blocknum, tx ];
+                                sum_of_sent = sum_of_sent + received_in_these_txs[ outpoint ][ 1 ];
                             });
                         }
                         Object.keys( received_in_these_txs ).forEach( item => {
-                            var blocknum = received_in_these_txs[ item ];
+                            var blocknum = received_in_these_txs[ item ][ 0 ];
                             var txid = item.substring( 0, 64 );
                             $$( '.list_of_matches li' ).forEach( li => {
                                 if ( Number( li.getAttribute( "data-blocknum" ) ) === blocknum ) {
@@ -609,7 +623,7 @@
                             });
                         });
                         Object.keys( sent_in_these_txs ).forEach( item => {
-                            var blocknum = sent_in_these_txs[ item ];
+                            var blocknum = sent_in_these_txs[ item ][ 0 ];
                             var txid = item.substring( 0, 64 );
                             $$( '.list_of_matches li' ).forEach( li => {
                                 if ( Number( li.getAttribute( "data-blocknum" ) ) === blocknum ) {
@@ -621,6 +635,7 @@
                                 }
                             });
                         });
+                        if ( blocknum === Number( $( '.list_of_matches' ).children[ $( '.list_of_matches' ).children.length - 1 ].getAttribute( "data-blocknum" ) ) ) $( '.balance' ).innerText = `${( sum_of_received - sum_of_sent ).toLocaleString()} sats`;
                     }
                     $( '.list_of_matches' ).childNodes.forEach( li => {
                         if ( !li.innerHTML.includes( "ul" ) ) li.innerHTML += `<ul><li>This one was a false positive</li></ul>`;
