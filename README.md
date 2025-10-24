@@ -4,11 +4,14 @@ A playground for learning about and testing bip157 filters
 # What is this?
 It's a website where you can learn what bip157 filters are and play with them.
 
-# Why did you make it?
-I've been trying to learn this stuff on my own and thought it might help others if I share what I've learned.
-
 # How can I try it?
 Just click here: https://supertestnet.github.io/bip157_playground
+
+# Demo video
+[![](https://supertestnet.github.io/bip157_playground/bip157-playground-thumbnail.png)](https://www.youtube.com/watch?v=INwrf6LF2sc)
+
+# Why did you make this?
+I've been trying to learn this stuff on my own and thought it might help others if I share what I've learned.
 
 # What are bip157 filters?
 To answer that, it will help if I tell you about some of my previous work. Sometimes I make bitcoin wallets, and when I do, I typically make two types: L1 wallets and L2 wallets. L2 wallets use experimental layer two software like the lightning network, and L1 wallets typically "just" use the regular bitcoin blockchain to transact. I've also made some hybrids of the two.
