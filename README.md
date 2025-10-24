@@ -2,7 +2,7 @@
 A playground for learning about and testing bip157 filters
 
 # What is this?
-It's a website where you can learn what bip157 filters are and how to play with them.
+It's a website where you can learn what bip157 filters are and play with them.
 
 # Why did you make it?
 I've been trying to learn this stuff on my own and thought it might help others if I share what I've learned.
