@@ -447,7 +447,7 @@
                 showPage( 'progress_page' );
                 $( '.progressBar' ).style.width = `0%`;
                 $( '.progress_label' ).innerText = `Progress syncing headers: 0%`;
-                $( '.explainer' ).innerText = `To use Bip157 filters quickly, you need the blockchain's headers first. Your browser is getting them right now.`;
+                $( '.explainer' ).innerText = `Your browser is getting the blockchain's headers right now. In case you don't know what a header is, it is the "top" part of a bitcoin block, containing metadata about that block, such as its timestamp and the hash of the previous block in the blockchain. The bip157 standard requires each block's header because its compression algorithm requires a unique key for each block of data compressed, and bip157 uses the hash of the block header as that key. So, to use the filter properly, we need the header of each block so we can hash it and get the compression key. Your browser is downloading the headers right now.`;
                 var num_of_queries = Math.ceil( blockheight / 100000 );
                 var i; for ( i=0; i<num_of_queries; i++ ) {
                     console.log( 'downloading headers...' );
