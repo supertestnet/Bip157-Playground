@@ -9,9 +9,25 @@
         <script src="https://unpkg.com/@cmdcode/tapscript@1.5.3"></script>
         <title>Bip157 Playground</title>
         <script>
+            const Network = Object.freeze({
+                MAINNET: 'MAINNET',
+                TESTNET4: 'TESTNET4',
+            });
+            var network = Network.MAINNET;
             var db = null;
+            var db_name = null;
             var db_is_ready = false;
-            var filter_sources = [ "bdn.bitcoin.lu.ke", "block-dn.org" ];
+            var filter_sources = { [Network.MAINNET]: "block-dn.org", [Network.TESTNET4]: "testnet4.block-dn.org" };
+            var mempool_guide_sources = { [Network.MAINNET]: "mempool.guide", [Network.TESTNET4]: "mempool.guide/testnet4" };
+            var default_addresses = { 
+                [Network.MAINNET]: "bc1q64nzjk9pcvjhrs6tty925w34eh020403nl4uam", 
+                [Network.TESTNET4]: "tb1q0n38rejycs0nu6tl3hqgqg3jx3v0kdtxl7xhyt"
+            };
+            var default_start_heights = { 
+                [Network.MAINNET]: 908000, 
+                [Network.TESTNET4]: 91520
+            };
+            var navigationHistory = ['home_page'];
             var blockhashes = [];
             var blockheight = 0;
             var matches = [];
@@ -192,13 +208,21 @@
             }
             var getHeaders = async start_block => {
                 try {
-                    var data = await fetch( `https://${filter_sources[ 1 ]}/headers/${start_block}` );
+                    var data = await fetch( `https://${filter_sources[network]}/headers/${start_block}` );
                     var blob = await data.blob();
                     var headers = await blobToHex( blob );
                     var num_of_headers = blockheight - start_block < 100000 ? blockheight - start_block : 100000;
                     var array_of_headers = [];
                     var i; for ( i=0; i<num_of_headers; i++ ) {
                         var header = headers.substring( 0, 160 );
+                        if (!header || header.length !== 160) {
+                            // TODO: base header count on actual data received?
+                            console.warn(`Invalid header at start block ${start_block} index ${i}:`, header);
+                            // blockheight can exceed the number of headers we get from filter source
+                            console.warn(`num_of_headers: ${num_of_headers}`);
+                            console.warn(`num of headers in source: ${headers.length / 160}`);                            
+                            break;
+                        }
                         array_of_headers.push( header );
                         headers = headers.substring( 160 );
                     }
@@ -209,13 +233,18 @@
             }
             var getFilters = async block_to_check => {
                 try {
-                    var data = await fetch( `https://${filter_sources[ 1 ]}/filters/${block_to_check}` );
+                    var data = await fetch( `https://${filter_sources[network]}/filters/${block_to_check}` );
                     var blob = await data.blob();
                     var filters = await blobToHex( blob );
                     var num_of_filters = blockheight - block_to_check < 2000 ? blockheight - block_to_check : 2000;
                     var array_of_filters = [];
                     var array_of_compact_sizes = [];
                     var i; for ( i=0; i<num_of_filters; i++ ) {
+                        if ( filters.length === 0 ) {
+                            // TODO: blockheight can exceed the number of filters we get from filter source
+                            console.warn(`No more filters to process at index ${i} for block to check ${block_to_check}`);
+                            break;
+                        }
                         var cs_data = decodeCompactSize( filters.substring( 0, 18 ) );
                         var filter = filters.substring( cs_data.actual_compact_size.length, cs_data.actual_compact_size.length + ( cs_data.size * 2 ) );
                         array_of_filters.push( filter );
@@ -339,6 +368,42 @@
                 border-radius: 1rem;
                 padding: 1rem;
             }
+            .loading_indicator {
+                margin-left: 10px;
+                font-size: 0.9rem;
+                color: #666;
+            }
+            .blockhashes_count {
+                margin-left: 10px;
+                font-size: 0.9rem;
+                color: #666;
+            }
+            .delete_db_btn {
+                margin-left: 5px;
+                padding: 2px 6px;
+                font-size: 0.8rem;
+                background: #ff6b6b;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                cursor: pointer;
+            }
+            .delete_db_btn:hover {
+                background: #ff5252;
+            }
+            .spinner {
+                display: inline-block;
+                width: 12px;
+                height: 12px;
+                border: 2px solid #f3f3f3;
+                border-top: 2px solid #666;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
             @media screen and (max-width: 600px) {
             }
         </style>
@@ -362,8 +427,19 @@
         <div class="home_page">
             <h1>Bip157 Playground</h1>
             <p>On this page you can use bip157 to explore the history of a bitcoin address with more privacy than you get from electrum servers, with the tradeoff that you have to download more data</p>
+            <p class="bold">Select network:</p>
+            <p>
+                <select class="network_select">
+                    <option value="MAINNET" selected>Mainnet</option>
+                    <option value="TESTNET4">Testnet4</option>
+                </select>
+            </p>
             <p class="bold">First, sync the bitcoin headers</p>
-            <p><button class="sync_headers">Sync headers</button></p>
+            <p>
+                <button class="sync_headers">Sync headers</button>
+                <span class="loading_indicator">Loading database... <span class="spinner"></span></span>
+                <span class="blockhashes_count hidden">0 blockhashes loaded <button class="delete_db_btn">Delete DB</button></span>
+            </p>
             <p class="bold">Or, learn about bip157 filters</p>
             <p><button class="learn_more">Learn</button></p>
             <div class="learn_more_div hidden">
@@ -392,10 +468,10 @@
         </div>
         <div class="check_address hidden">
             <p class="bold">Enter a bitcoin address</p>
-            <p><input class="address" value="bc1q64nzjk9pcvjhrs6tty925w34eh020403nl4uam"></p>
+            <p><input class="address" value=""></p>
             <p class="bold">Enter a start height -- that is, a blockheight from a time just before you created that address</p>
-            <p><input type="number" min="1" step="1" class="start_height" value="908000"></p>
-            <p><button class="submit_form">Submit</button></p>
+            <p><input type="number" min="1" step="1" class="start_height" value=""></p>
+            <p><button class="submit_form">Submit</button> <button class="back_btn">Back</button></p>
         </div>
         <div class="progress_page hidden">
             <h2 class="progress_label"></h2>
@@ -408,10 +484,12 @@
                 <div class="status"></div>
             </div>
             <div class="explainer"></div>
+            <p><button class="back_btn">Back</button></p>
         </div>
         <div class="headers_already_stored hidden">
             <p>You do not need to download the headers because you already did so previously, and they were stored in your browser's memory. Click the button below to proceed to the next step.</p>
             <p><button class="proceed_to_check_address">Proceed</button></p>
+            <p><button class="back_btn">Back</button></p>
         </div>
         <div class="matches hidden">
             <h2>Results</h2>
@@ -419,16 +497,55 @@
             <p>That address has the following balance: <span class="balance">calculating...</span></p>
             <p>That address sent or received money in the following transactions:</p>
             <ul class="list_of_matches"></ul>
+            <p><button class="back_btn">Back</button></p>
         </div>
         <script>
             console.log( 'not ready...' );
-            var showPage = page => {
+            var showPage = (page, addToHistory = true) => {
                 $( '.home_page' ).classList.add( "hidden" );
                 $( '.check_address' ).classList.add( "hidden" );
                 $( '.progress_page' ).classList.add( "hidden" );
                 $( '.headers_already_stored' ).classList.add( "hidden" );
                 $( '.matches' ).classList.add( "hidden" );
                 $( `.${page}` ).classList.remove( "hidden" );
+                
+                // Add to navigation history if not going back
+                if (addToHistory) {
+                    navigationHistory.push(page);
+                    console.log('Navigation history:', navigationHistory);
+                }
+            }
+            var hideBackButtons = () => {
+                $$( '.back_btn' ).forEach(btn => {
+                    btn.style.display = 'none';
+                });
+            }
+            var showBackButtons = () => {
+                $$( '.back_btn' ).forEach(btn => {
+                    btn.style.display = 'inline-block';
+                });
+            }
+            var goBack = async () => {
+                // Remove current page from history
+                if (navigationHistory.length > 1) {
+                    navigationHistory.pop();
+                    var previousPage = navigationHistory[navigationHistory.length - 1];
+                    console.log('Going back to:', previousPage);
+                    
+                    // If going back to home page, re-read database to refresh blockhashes count
+                    if (previousPage === 'home_page') {
+                        console.log('Returning to home page, refreshing database...');
+                        db_is_ready = false;
+                        $( '.loading_indicator' ).classList.remove( 'hidden' );
+                        $( '.blockhashes_count' ).classList.add( 'hidden' );
+                        await initializeDatabase();
+                    }
+                    
+                    showPage(previousPage, false); // Don't add to history when going back
+                } else {
+                    // Fallback to home page if history is empty
+                    showPage('home_page', false);
+                }
             }
             $( '.sync_headers' ).onclick = async () => {
                 if ( !blockheight ) await waitSomeTime( 1000 );
@@ -438,15 +555,16 @@
                     showPage( 'headers_already_stored' );
                     if ( blockhashes.length < blockheight ) {
                         var i; for ( i=blockhashes.length; i<=blockheight; i++ ) {
-                            var blockhash_data = await fetch( `https://mempool.guide/api/block-height/${i}` );
+                            var blockhash_data = await fetch( `https://${mempool_guide_sources[network]}/api/block-height/${i}` );
                             var blockhash = await blockhash_data.text();
                             blockhashes.push( blockhash );
-                            await addToDB( `blockhashes`, [ blockhash ] );
+                            await addToDB( db_name, [ blockhash ] );
                         }
                     }
                     return;
                 }
                 showPage( 'progress_page' );
+                hideBackButtons();
                 $( '.progressBar' ).style.width = `0%`;
                 $( '.progress_label' ).innerText = `Progress syncing headers: 0%`;
                 $( '.explainer' ).innerText = `Your browser is getting the blockchain's headers right now. In case you don't know what a header is, it is the "top" part of a bitcoin block, containing metadata about that block, such as its timestamp and the hash of the previous block in the blockchain. The bip157 standard requires each block's header because its compression algorithm requires a unique key for each block of data compressed, and bip157 uses the hash of the block header as that key. So, to use the filter properly, we need the header of each block so we can hash it and get the compression key. Your browser is downloading the headers right now.`;
@@ -481,8 +599,9 @@
                     var start = i * 1000;
                     var end = start + 1000;
                     var slice_of_hashes = blockhashes.slice( start, end );
-                    await addToDB( `blockhashes`, slice_of_hashes );
+                    await addToDB( db_name, slice_of_hashes );
                 }
+                showBackButtons();
                 showPage( 'check_address' );
             }
             $( '.learn_more' ).onclick = () => {
@@ -490,10 +609,77 @@
                 else $( '.learn_more_div' ).classList.add( "hidden" );
             }
             $( '.close_this_explainer' ).onclick = () => $( '.learn_more_div' ).classList.add( "hidden" );
+            var updateFormDefaults = () => {
+                if ($('.address')) {
+                    $('.address').value = default_addresses[network];
+                }
+                if ($('.start_height')) {
+                    $('.start_height').value = default_start_heights[network];
+                }
+            };
+            var updateBlockhashesCount = () => {
+                const count = blockhashes.length;
+                $( '.blockhashes_count' ).innerText = `${count.toLocaleString()} blockhashes loaded `;
+                // Re-add the delete button since innerText removes it
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete_db_btn';
+                deleteBtn.innerText = 'Delete DB';
+                deleteBtn.onclick = deleteDatabase;
+                $( '.blockhashes_count' ).appendChild(deleteBtn);
+            };
+            var deleteDatabase = async () => {
+                if (!confirm(`Delete ${network.toLowerCase()} database? This will remove all stored blockhashes and you'll need to sync again.`)) return;
+                // Clear the database
+                if (db) {
+                    return new Promise((resolve) => {
+                        const transaction = db.transaction([db_name], 'readwrite');
+                        const objectStore = transaction.objectStore(db_name);
+                        const clearRequest = objectStore.clear();
+                        clearRequest.onsuccess = () => {
+                            // Reset state
+                            blockhashes = [];
+                            updateBlockhashesCount();
+                            console.log(`${network} database deleted`);
+                            resolve();
+                        };
+                    });
+                }
+            };
+            var initializeDatabase = async () => {
+                var data = await fetch( `https://${mempool_guide_sources[network]}/api/blocks/tip/height` );
+                blockheight = Number( await data.text() );
+                db_name = `blockhashes`;
+                if ( network !== Network.MAINNET ) db_name += `_${network.toLowerCase()}`; // dont clobber mainnet data which existed before the network select feature was added
+                var [ the_db, db_has_content ] = await openDB( db_name );
+                db = the_db;
+                if ( db_has_content ) blockhashes = await getFromDB( db_name, "all" );
+                else blockhashes = [];
+                db_is_ready = true;
+                $( '.loading_indicator' ).classList.add( 'hidden' );
+                $( '.blockhashes_count' ).classList.remove( 'hidden' );
+                updateBlockhashesCount();
+                console.log( 'ready' );
+            };
+            $( '.network_select' ).onchange = async (e) => {
+                network = e.target.value;
+                console.log(`Network changed to: ${network}`);
+                // Update form defaults for new network
+                updateFormDefaults();
+                // Reset state
+                db_is_ready = false;
+                blockhashes = [];
+                db = null;
+                // Show loading indicator, hide blockhashes count
+                $( '.loading_indicator' ).classList.remove( 'hidden' );
+                $( '.blockhashes_count' ).classList.add( 'hidden' );
+                // Reinitialize database for new network
+                await initializeDatabase();
+            };
             $( '.proceed_to_check_address' ).onclick = () => {showPage( 'check_address' );}
             $( '.submit_form' ).onclick = async () => {
                 matches = [];
                 showPage( 'progress_page' );
+                hideBackButtons();
                 $( '.progressBar' ).style.width = `0%`;
                 $( '.progress_label' ).innerText = `Progress checking tx history: 0%`;
                 $( '.explainer' ).innerText = `Your browser is now downloading compact block filters from after your start height and scanning them to see if your address sent or received money in the corresponding blocks.`;
@@ -540,6 +726,7 @@
                                 if ( all_are_synced ) {
                                     $( '.progressBar' ).style.width = `100%`;
                                     $( '.progress_label' ).innerText = `Progress downloading blocks: 100%`;
+                                    showBackButtons();
                                 }
                             }
                         }
@@ -555,7 +742,7 @@
                         var block_filter = Buffer.from( filter_i_want, "hex" );
                         var filter = gcs_filter( block_filter );
                         if ( !blockhashes.length ) {
-                            var data = await fetch( `https://mempool.guide/api/block-height/${blocknum}` );
+                            var data = await fetch( `https://${mempool_guide_sources[network]}/api/block-height/${blocknum}` );
                             var its_blockhash = await data.text();
                         } else {
                             var its_blockhash = blockhashes[ blocknum ];
@@ -589,11 +776,12 @@
                         }
                         var blocknum = matches[ i ];
                         var blockhash = blockhashes[ blocknum ];
-                        var data = await fetch( `https://mempool.guide/api/block/${blockhash}/raw` );
+                        var data = await fetch( `https://${mempool_guide_sources[network]}/api/block/${blockhash}/raw` );
                         var blob = await data.blob();
                         var block = await blobToHex( blob );
                         var txs = getTransactionsFromBlock( block );
                         var j; for ( j=0; j<txs.length; j++ ) {
+                            if (txs [ j ].hex.length == 391894) continue; // skip testnet4 e5f01553de425e7b5972e788d0b6c9c19dc225bb78afa9be66ea6f16a89a34d4 which the lib cant parse
                             var tx = tapscript.Tx.decode( txs[ j ].hex );
                             tx.vout.forEach( ( output, index ) => {
                                 if ( output.scriptPubKey !== script ) return;
@@ -616,7 +804,7 @@
                                     if ( !li.innerHTML.includes( "<ul" ) ) li.innerHTML += `<ul class="list_of_txids"></ul>`;
                                     if ( li.innerHTML.includes( txid ) ) return;
                                     var new_li = document.createElement( "li" );
-                                    new_li.innerHTML = `<a href="https://mempool.guide/tx/${txid}" target="_blank">${txid}</a>`;
+                                    new_li.innerHTML = `<a href="https://${mempool_guide_sources[network]}/tx/${txid}" target="_blank">${txid}</a>`;
                                     li.getElementsByClassName( "list_of_txids" )[ 0 ].append( new_li );
                                 }
                             });
@@ -629,7 +817,7 @@
                                     if ( !li.innerHTML.includes( "ul" ) ) li.innerHTML += `<ul class="list_of_txids"></ul>`;
                                     if ( li.innerHTML.includes( txid ) ) return;
                                     var new_li = document.createElement( "li" );
-                                    new_li.innerHTML = `<a href="https://mempool.guide/tx/${txid}" target="_blank">${txid}</a>`;
+                                    new_li.innerHTML = `<a href="https://${mempool_guide_sources[network]}/tx/${txid}" target="_blank">${txid}</a>`;
                                     li.getElementsByClassName( "list_of_txids" )[ 0 ].append( new_li );
                                 }
                             });
@@ -640,16 +828,45 @@
                         if ( !li.innerHTML.includes( "ul" ) ) li.innerHTML += `<ul><li>This one was a false positive</li></ul>`;
                     });
                 }
+                showBackButtons();
             }
-            (async()=>{
-                var data = await fetch( `https://mempool.guide/api/blocks/tip/height` );
-                blockheight = Number( await data.text() );
-                var db_name = `blockhashes`;
-                var [ the_db, db_has_content ] = await openDB( db_name );
-                db = the_db;
-                if ( db_has_content ) blockhashes = await getFromDB( db_name, "all" );
-                db_is_ready = true;
-                console.log( 'ready' );
+            // Initialize on page load
+            (async () => {
+                // Initialize navigation history
+                navigationHistory = ['home_page'];
+                // Wait for DOM to be ready
+                if (!$('.network_select')) {
+                    await waitSomeTime(100);
+                }
+                // Sync network variable with dropdown value (handles browser form persistence)
+                network = $('.network_select').value;
+                console.log(`Initial network from dropdown: ${network}`);
+                // Set initial form defaults based on network
+                updateFormDefaults(); 
+                // Attach back button event handlers after DOM is ready
+                $$( '.back_btn' ).forEach(btn => {
+                    btn.onclick = () => {
+                        // Clear search results when going back from results page
+                        var currentPage = navigationHistory[navigationHistory.length - 1];
+                        if (currentPage === 'matches') {
+                            matches = [];
+                            received_in_these_txs = {};
+                            sent_in_these_txs = {};
+                            // Clear results list
+                            $( '.list_of_matches' ).innerHTML = '';
+                            // Reset balance and address spans
+                            $( '.balance' ).innerText = 'calculating...';
+                            $( '.addy' ).innerText = '';
+                        }
+                        // Reset progress bar when going back from progress page
+                        if (currentPage === 'progress_page') {
+                            $( '.progressBar' ).style.width = '0%';
+                        }
+                        goBack();
+                    };
+                }); 
+                // Initialize database
+                await initializeDatabase();
             })();
         </script>
     </body>
